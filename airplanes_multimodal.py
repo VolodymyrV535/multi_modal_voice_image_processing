@@ -10,10 +10,12 @@ import base64
 from io import BytesIO
 from PIL import Image
 
-# for audio generation
-from io import BytesIO
+# text to audio 
 from pydub import AudioSegment
 from pydub.playback import play
+import tempfile
+import subprocess
+import time
 
 
 # Initialization
@@ -37,6 +39,7 @@ system_message += "Always be accurate. If you don't know the answer, say so."
 # Let's start by making a useful function
 ticket_prices = {"london": "$799", "paris": "$899", "tokyo": "$1400", "berlin": "$499"}
 
+# function to be used as a tool1 for openai
 def get_ticket_price(destination_city):
     print(f"Tool get_ticket_price called for {destination_city}")
     city = destination_city.lower()
@@ -60,8 +63,53 @@ price_function = {
     }
 }
 
-# And this is included in a list of tools:
-tools = [{"type": "function", "function": price_function}]
+
+# # tool2 for booking flights
+booked_flights = []
+
+def book_flight(destination_city, amount, name):
+    print(f"Tool book_flight called for {destination_city}, {amount}, {name}")
+    city = destination_city.lower()
+    one_ticket_price = get_ticket_price(city)
+    if one_ticket_price == "Unknown":
+        return "No flights for that city"
+    else:
+        total_price = int(one_ticket_price.strip('$')) * int(amount)
+        booked_flights.append({
+            "buyer": {name},
+            "amount": {amount},
+            "destination_city": {destination_city}
+        })
+        return f"{amount} ticket(s) to {destination_city} booked for {name}"
+    
+# There's a particular dictionary structure that's required to describe our function:
+book_function = {
+    "name": "book_flight",
+    "description": "Books ticket(s) to the destination city if flight exists. Call this whenever you need to book ticket for the peron, for example when a customer asks 'book a ticket or tickets to this city'",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "destination_city": {
+                "type": "string",
+                "description": "The city that the customer wants to travel to",
+            },
+            "name": {
+                "type": "string",
+                "description": "The name of the customer",
+             },
+            "amount":{
+                "type": "string",
+                "description": "amount of tickets to buy",
+            }
+        },
+        "required": ["destination_city", "name", "amount"],
+        "additionalProperties": False
+    }
+}
+
+# # And this is included in a list of tools:
+tools = [{"type": "function", "function": price_function},{"type": "function", "function": book_function}]
+# tools = [{"type": "function", "function": price_function}]
 
 
 def chat(message, history):
@@ -81,15 +129,36 @@ def chat(message, history):
 # We have to write that function handle_tool_call:
 def handle_tool_call(message):
     tool_call = message.tool_calls[0]
+    print("debugging here:")
+    print(f"tool_call:{tool_call}" )
+    print("______________________")
+    function_name = tool_call.function.name
     arguments = json.loads(tool_call.function.arguments)
     city = arguments.get('destination_city')
-    price = get_ticket_price(city)
-    response = {
-        "role": "tool",
-        "content": json.dumps({"destination_city": city,"price": price}),
-        "tool_call_id": tool_call.id
-    }
-    return response, city
+    
+    if function_name == "get_ticket_price":
+        price = get_ticket_price(city)
+        response = {
+            "role": "tool",
+            "content": json.dumps({"destination_city": city,"price": price}),
+            "tool_call_id": tool_call.id
+        }
+        return response, city
+    
+    elif function_name == "book_flight":
+        amount = arguments.get('amount')
+        name = arguments.get('name')
+        answer = book_flight(city, amount, name)
+        
+        response = {
+            "role": "tool",
+            "content": json.dumps({"destination_city": city, "answer": answer}),
+            "tool_call_id": tool_call.id
+        }
+        return response, city
+    else:
+        print("debugging error")
+        return response, city
 
 
 # image generator
@@ -105,13 +174,6 @@ def artist(city):
     image_data = base64.b64decode(image_base64)
     return Image.open(BytesIO(image_data))
 
-
-# text to audio 
-import tempfile
-import subprocess
-from io import BytesIO
-from pydub import AudioSegment
-import time
 
 def play_audio(audio_segment):
     temp_dir = tempfile.gettempdir()
