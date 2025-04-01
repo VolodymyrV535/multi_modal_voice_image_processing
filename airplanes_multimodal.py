@@ -18,6 +18,9 @@ import tempfile
 import subprocess
 import time
 
+# audio to text
+import speech_recognition as sr
+
 
 # Initialization
 load_dotenv(override=True)
@@ -224,6 +227,24 @@ def translator(history):
     
     return translated_text
 
+
+# Speech-to-text function using SpeechRecognition library
+def speech_to_text(audio_file_path):
+    recognizer = sr.Recognizer()
+    # Ensure that the path matches an actual file
+    if isinstance(audio_file_path, str):
+        with sr.AudioFile(audio_file_path) as source:
+            audio = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio)
+        except sr.UnknownValueError:
+            text = "Could not understand audio"
+        except sr.RequestError:
+            text = "Speech recognition service unavailable"
+    else:
+        text = "Invalid file path for audio input"
+    return text
+
     
 # chat functionality backend
 def chat(history):
@@ -248,7 +269,6 @@ def chat(history):
     return history, image
 
 
-# More involved Gradio code as we're not using the preset Chat interface!
 # Passing in inbrowser=True in the last line will cause a Gradio window to pop up immediately.
 # More involved Gradio code as we're not using the preset Chat interface!
 with gr.Blocks() as ui:
@@ -258,6 +278,7 @@ with gr.Blocks() as ui:
         image_output = gr.Image(height=500)
     with gr.Row():
         entry = gr.Textbox(label="Chat with our AI Assistant:")
+        record_button = gr.Audio(sources="microphone", type="filepath", label="Record Voice")
     with gr.Row():
         clear = gr.Button("Clear")
 
@@ -271,5 +292,8 @@ with gr.Blocks() as ui:
         translator, inputs=chatbot, outputs=translated_textbox  # Update with translator output
     )
     clear.click(lambda: None, inputs=None, outputs=[chatbot, translated_textbox], queue=False)  # Clear both elements
+    
+    # Process audio input
+    record_button.change(speech_to_text, inputs=record_button, outputs=entry)
 
 ui.launch(inbrowser=True)
