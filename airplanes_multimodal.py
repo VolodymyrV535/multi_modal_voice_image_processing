@@ -3,6 +3,7 @@ import os
 import json
 from dotenv import load_dotenv
 from openai import OpenAI
+import anthropic
 import gradio as gr
 
 # Some imports for handling images
@@ -30,11 +31,18 @@ else:
 MODEL = "gpt-4o-mini"
 openai = OpenAI()
 
-
 # program
+# system message for openai api
 system_message = "You are a helpful assistant for an Airline called FlightAI. "
 system_message += "Give short, courteous answers, no more than 1 sentence. "
 system_message += "Always be accurate. If you don't know the answer, say so."
+
+# additional model for translation
+anthropic_api_key = os.getenv('ANTHROPIC_API_KEY')
+claude = anthropic.Anthropic()
+system_message_translator = "You are a helpful assistant for translation from English to Ukraininan."
+system_message_translator += "Give precise translation for a given input text."
+
 
 # Let's start by making a useful function
 ticket_prices = {"london": "$799", "paris": "$899", "tokyo": "$1400", "berlin": "$499"}
@@ -109,21 +117,6 @@ book_function = {
 
 # # And this is included in a list of tools:
 tools = [{"type": "function", "function": price_function},{"type": "function", "function": book_function}]
-# tools = [{"type": "function", "function": price_function}]
-
-
-def chat(message, history):
-    messages = [{"role": "system", "content": system_message}] + history + [{"role": "user", "content": message}]
-    response = openai.chat.completions.create(model=MODEL, messages=messages, tools=tools)
-
-    if response.choices[0].finish_reason=="tool_calls":
-        message = response.choices[0].message
-        response, city = handle_tool_call(message)
-        messages.append(message)
-        messages.append(response)
-        response = openai.chat.completions.create(model=MODEL, messages=messages)
-    
-    return response.choices[0].message.content
 
 
 # We have to write that function handle_tool_call:
@@ -204,6 +197,33 @@ def talker(message):
     audio = AudioSegment.from_file(audio_stream, format="mp3")
     play_audio(audio)
 
+
+# Translator function using Claude API
+def translator(history):
+    translated_text = ""
+
+    # Only translate new messages (those after the last translated index)
+    for i, message in enumerate(history):
+        # Translate message using Claude API
+        result = claude.messages.stream(
+            model="claude-3-5-sonnet-latest",
+            max_tokens=200,
+            temperature=0.7,
+            system=system_message_translator,
+            messages=[
+                {"role": "user", "content": message['content']},
+            ],
+        )
+
+        response = ""
+        with result as stream:
+            for text in stream.text_stream:
+                response += text or ""
+
+        translated_text += "\n" + response + "\n"
+    
+    return translated_text
+
     
 # chat functionality backend
 def chat(history):
@@ -230,9 +250,11 @@ def chat(history):
 
 # More involved Gradio code as we're not using the preset Chat interface!
 # Passing in inbrowser=True in the last line will cause a Gradio window to pop up immediately.
+# More involved Gradio code as we're not using the preset Chat interface!
 with gr.Blocks() as ui:
     with gr.Row():
         chatbot = gr.Chatbot(height=500, type="messages")
+        translated_textbox = gr.Textbox(label="Переклад:")
         image_output = gr.Image(height=500)
     with gr.Row():
         entry = gr.Textbox(label="Chat with our AI Assistant:")
@@ -240,12 +262,14 @@ with gr.Blocks() as ui:
         clear = gr.Button("Clear")
 
     def do_entry(message, history):
-        history += [{"role":"user", "content":message}]
+        history.append({"role": "user", "content": message})
         return "", history
 
     entry.submit(do_entry, inputs=[entry, chatbot], outputs=[entry, chatbot]).then(
         chat, inputs=chatbot, outputs=[chatbot, image_output]
+    ).then(
+        translator, inputs=chatbot, outputs=translated_textbox  # Update with translator output
     )
-    clear.click(lambda: None, inputs=None, outputs=chatbot, queue=False)
+    clear.click(lambda: None, inputs=None, outputs=[chatbot, translated_textbox], queue=False)  # Clear both elements
 
 ui.launch(inbrowser=True)
